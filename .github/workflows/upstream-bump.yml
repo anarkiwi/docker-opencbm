@@ -1,0 +1,71 @@
+name: upstream-bump
+
+on:
+  schedule:
+    - cron: '49 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: check OpenCBM default branch
+        id: up
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          branch=$(gh api repos/OpenCBM/OpenCBM -q .default_branch)
+          sha=$(gh api "repos/OpenCBM/OpenCBM/commits/${branch}" -q .sha)
+          case "${sha}" in ''|null) echo "cannot resolve OpenCBM" >&2; exit 1;; esac
+          current=$(sed -n 's/^ARG OPENCBM_REF=//p' Dockerfile)
+          echo "OpenCBM@${branch}: ${current} -> ${sha}"
+          {
+            echo "ref=${sha}"
+            echo "short=$(echo "${sha}" | cut -c1-8)"
+            echo "changed=$([ "${sha}" = "${current}" ] && echo false || echo true)"
+          } >> "${GITHUB_OUTPUT}"
+          sed -i "s|^ARG OPENCBM_REF=.*|ARG OPENCBM_REF=${sha}|" Dockerfile
+
+      # PRs opened with GITHUB_TOKEN do not start workflow runs, so the new pin
+      # is built and tested here instead of on the pull request.
+      - uses: docker/setup-buildx-action@v4
+        if: steps.up.outputs.changed == 'true'
+
+      - name: build
+        if: steps.up.outputs.changed == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: opencbm:bump
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: smoke test
+        if: steps.up.outputs.changed == 'true'
+        run: tests/smoke.sh opencbm:bump
+
+      - name: open pull request
+        if: steps.up.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: opencbm-${{ steps.up.outputs.short }}
+          commit-message: "OpenCBM ${{ steps.up.outputs.short }}"
+          title: "OpenCBM ${{ steps.up.outputs.short }}"
+          body: |
+            Pin OpenCBM
+            [${{ steps.up.outputs.short }}](https://github.com/OpenCBM/OpenCBM/commit/${{ steps.up.outputs.ref }}).
+
+            OpenCBM publishes no usable releases, so the default branch head is
+            tracked instead.
+
+            Built and smoke tested in
+            [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }});
+            `ci` does not run on pull requests opened by `GITHUB_TOKEN`.
+          delete-branch: true

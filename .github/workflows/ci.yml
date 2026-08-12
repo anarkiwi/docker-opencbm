@@ -25,10 +25,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke test
-        run: |
-          docker run --rm opencbm:test cbmctrl --help
-          docker run --rm opencbm:test grep -qx 'default=xum1541' /etc/opencbm.conf
-          docker run --rm opencbm:test ldd /usr/local/lib/opencbm/plugin/libopencbm-xum1541.so | grep -q libusb-1.0
+        run: tests/smoke.sh opencbm:test
 
   push:
     needs: test
